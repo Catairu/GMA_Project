@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "dgl==1.1.2",
     "numpy==1.26.4",
+    "optuna>=4.8.0",
     "packaging>=26.2",
     "scikit-learn>=1.8.0",
     "setuptools>=82.0.1",

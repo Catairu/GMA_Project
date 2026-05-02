@@ -1,5 +1,7 @@
 import argparse
+import random
 from collections import OrderedDict
+from collections.abc import Callable
 
 import dgl
 import dgl.nn as dglnn
@@ -18,11 +20,17 @@ from src.utilities.partitioning import (
 
 
 class GraphSAGEClassifier(nn.Module):
-    def __init__(self, in_dim: int, hidden_dim: int, out_dim: int) -> None:
+    def __init__(
+        self,
+        in_dim: int,
+        hidden_dim: int,
+        out_dim: int,
+        dropout: float = 0.2,
+    ) -> None:
         super().__init__()
         self.conv1 = dglnn.SAGEConv(in_dim, hidden_dim, aggregator_type="mean")
         self.conv2 = dglnn.SAGEConv(hidden_dim, out_dim, aggregator_type="mean")
-        self.dropout = nn.Dropout(0.2)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, graph: dgl.DGLGraph, x: torch.Tensor) -> torch.Tensor:
         h = self.conv1(graph, x)
@@ -33,6 +41,7 @@ class GraphSAGEClassifier(nn.Module):
 
 
 def set_seed(seed: int) -> None:
+    random.seed(seed)
     torch.manual_seed(seed)
     np.random.seed(seed)
     dgl.seed(seed)
@@ -171,23 +180,21 @@ def evaluate_federated(server, clients, model_fn, mask_type="test"):
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Federated GraphSAGE with FedAvg on DGL fraud graph datasets."
-    )
+def add_experiment_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--dataset",
         type=str,
-        default="yelp",
+        default="amazon",
         choices=["amazon", "yelp"],
     )
     parser.add_argument("--n-clients", type=int, default=10)
     parser.add_argument("--global-rounds", type=int, default=1000)
-    parser.add_argument("--local-epochs", type=int, default=2)
+    parser.add_argument("--local-epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--weight-decay", type=float, default=5e-4)
     parser.add_argument("--hidden-dim", type=int, default=128)
-    parser.add_argument("--train-ratio", type=float, default=0.8)
+    parser.add_argument("--dropout", type=float, default=0.2)
+    parser.add_argument("--train-ratio", type=float, default=0.7)
     parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--eval-every", type=int, default=10)
     parser.add_argument(
@@ -200,13 +207,36 @@ def main() -> None:
     parser.add_argument(
         "--class-weighting",
         type=str,
-        default="global",
-        choices=["none", "global", "local"],
+        default="local",
+        choices=["none", "local"],
         help="Class weights used only for local training loss.",
     )
+    parser.add_argument(
+        "--selection-metric",
+        type=str,
+        default="macro_f1",
+        choices=[
+            "loss",
+            "accuracy",
+            "balanced_accuracy",
+            "macro_precision",
+            "macro_recall",
+            "macro_f1",
+        ],
+        help="Validation metric used to select/tune the best run.",
+    )
     parser.add_argument("--seed", type=int, default=42)
-    args = parser.parse_args()
 
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Federated GraphSAGE with FedAvg on DGL fraud graph datasets."
+    )
+    add_experiment_args(parser)
+    return parser
+
+
+def validate_args(args: argparse.Namespace) -> None:
     if args.n_clients <= 0:
         raise ValueError("--n-clients must be > 0.")
     if args.global_rounds <= 0:
@@ -217,15 +247,32 @@ def main() -> None:
         raise ValueError("--dirichlet-alpha must be > 0.")
     if args.train_ratio <= 0 or args.val_ratio < 0 or args.train_ratio + args.val_ratio >= 1:
         raise ValueError("--train-ratio must be > 0 and train+val must be < 1.")
+    if not 0.0 <= args.dropout < 1.0:
+        raise ValueError("--dropout must be in [0, 1).")
+
+
+def is_better_metric(metric: str, score: float, best_score: float) -> bool:
+    if metric == "loss":
+        return score < best_score
+    return score > best_score
+
+
+def run_experiment(
+    args: argparse.Namespace,
+    *,
+    verbose: bool = True,
+    evaluate_test: bool = True,
+    progress_callback: Callable[[int, dict[str, float]], None] | None = None,
+) -> dict[str, object]:
+    validate_args(args)
+
+    def log(message: str) -> None:
+        if verbose:
+            print(message)
 
     set_seed(args.seed)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    data = load_graph_dataset(args.dataset)
-    graph = data.graph
-    num_classes = data.num_classes
-    features = data.features
-    labels = data.labels
 
     n_clients = args.n_clients
     global_rounds = args.global_rounds
@@ -234,17 +281,15 @@ def main() -> None:
     weight_decay = args.weight_decay
     hidden_dim = args.hidden_dim
 
-    global_counts = label_counts(labels, num_classes)
-    global_class_weights = None
-    if args.class_weighting == "global":
-        global_class_weights = compute_class_weights(labels, num_classes)
+    # Questa parte è ridondante e smaltibile utilizzando solo dglgraph invece di creare quell'oggetto
+    data = load_graph_dataset(args.dataset)
+    graph = data.graph
+    num_classes = data.num_classes
+    features = data.features
+    labels = data.labels
 
-    print(f"Device: {device}")
-    print(f"Global label distribution: {global_counts}")
-    if global_class_weights is not None:
-        rounded = [round(v, 4) for v in global_class_weights.tolist()]
-        print(f"Global training class weights: {rounded}")
-    print(f"Partition method: {args.partition_method}")
+    log(f"Device: {device}")
+    log(f"Partition method: {args.partition_method}")
 
     partitions = build_partitions(
         graph=graph,
@@ -257,7 +302,14 @@ def main() -> None:
     )
 
     in_dim = features.shape[1]
-    model_fn = lambda: GraphSAGEClassifier(in_dim, hidden_dim, num_classes)
+    log(f"Input feature dim: {in_dim}")
+
+    model_fn = lambda: GraphSAGEClassifier(
+        in_dim,
+        hidden_dim,
+        num_classes,
+        dropout=args.dropout,
+    )
 
     server = FedAvgServer(model_fn=model_fn, device=device)
     clients: list[FederatedClient] = []
@@ -278,12 +330,13 @@ def main() -> None:
         val_mask[val_idx] = True
         test_mask[test_idx] = True
 
-        client_class_weights = global_class_weights
+        client_class_weights = None
         if args.class_weighting == "local":
             client_class_weights = compute_class_weights(
                 subg.ndata["label"][train_mask],
                 num_classes,
             )
+            log(f"Client {client_id} class weights: {client_class_weights}")
 
         client = FederatedClient(
             client_id=client_id,
@@ -297,12 +350,13 @@ def main() -> None:
             class_weights=client_class_weights,
             device=device,
         )
+
         if client.num_train_samples == 0:
-            print(f"Client {client_id}: skipped (no train samples)")
+            log(f"Client {client_id}: skipped (no train samples)")
             continue
 
         clients.append(client)
-        print(
+        log(
             f"Client {client_id}: "
             f"nodes={subg.num_nodes()}, "
             f"train={client.num_train_samples}, "
@@ -315,6 +369,14 @@ def main() -> None:
 
     if not clients:
         raise RuntimeError("No client has train samples. Check partitioning/split.")
+
+    history: list[dict[str, object]] = []
+    best_round = 0
+    best_val_metrics: dict[str, float] = {}
+    best_test_metrics: dict[str, float] | None = None
+    final_val_metrics: dict[str, float] = {}
+    final_test_metrics: dict[str, float] | None = None
+    best_score = float("inf") if args.selection_metric == "loss" else -float("inf")
 
     for rnd in range(1, global_rounds + 1):
         global_state = server.get_global_state()
@@ -338,21 +400,66 @@ def main() -> None:
         )
         if should_eval:
             val_metrics = evaluate_federated(server, clients, model_fn, "val")
-            test_metrics = evaluate_federated(server, clients, model_fn, "test")
-            print(
+            test_metrics = (
+                evaluate_federated(server, clients, model_fn, "test")
+                if evaluate_test
+                else None
+            )
+            final_val_metrics = val_metrics
+            final_test_metrics = test_metrics
+
+            val_score = val_metrics[args.selection_metric]
+            if is_better_metric(args.selection_metric, val_score, best_score):
+                best_score = val_score
+                best_round = rnd
+                best_val_metrics = val_metrics
+                best_test_metrics = test_metrics
+
+            history_entry: dict[str, object] = {
+                "round": rnd,
+                "train_loss": train_loss,
+                "val": val_metrics,
+            }
+            if test_metrics is not None:
+                history_entry["test"] = test_metrics
+            history.append(history_entry)
+
+            if progress_callback is not None:
+                progress_callback(rnd, val_metrics)
+
+            message = (
                 f"Round {rnd:04d} | "
                 f"train_loss={train_loss:.4f} | "
                 f"val_loss={val_metrics['loss']:.4f} "
                 f"val_acc={val_metrics['accuracy']:.4f} "
                 f"val_bal_acc={val_metrics['balanced_accuracy']:.4f} "
-                f"val_macro_f1={val_metrics['macro_f1']:.4f} | "
-                f"test_loss={test_metrics['loss']:.4f} "
-                f"test_acc={test_metrics['accuracy']:.4f} "
-                f"test_bal_acc={test_metrics['balanced_accuracy']:.4f} "
-                f"test_macro_f1={test_metrics['macro_f1']:.4f}"
+                f"val_macro_f1={val_metrics['macro_f1']:.4f}"
             )
+            if test_metrics is not None:
+                message += (
+                    f" | test_loss={test_metrics['loss']:.4f} "
+                    f"test_acc={test_metrics['accuracy']:.4f} "
+                    f"test_bal_acc={test_metrics['balanced_accuracy']:.4f} "
+                    f"test_macro_f1={test_metrics['macro_f1']:.4f}"
+                )
+            log(message)
         else:
-            print(f"Round {rnd:04d} | train_loss={train_loss:.4f}")
+            log(f"Round {rnd:04d} | train_loss={train_loss:.4f}")
+
+    return {
+        "best_round": best_round,
+        "best_val_metrics": best_val_metrics,
+        "best_test_metrics": best_test_metrics,
+        "final_val_metrics": final_val_metrics,
+        "final_test_metrics": final_test_metrics,
+        "history": history,
+    }
+
+
+def main() -> None:
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    run_experiment(args)
 
 
 if __name__ == "__main__":
