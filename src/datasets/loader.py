@@ -1,50 +1,46 @@
-# src/datasets/loader.py
-
 import dgl
-from dgl.data import FraudDataset, FraudAmazonDataset
 import torch
+from dgl.data import FraudDataset
 
-def load_graph_dataset(name='amazon'):
-    """
-    Carica un dataset di grafi per la detection delle frodi tramite DGL.
-    
-    Args:
-        name (str): 'amazon' per FraudAmazonDataset, 'yelp' per FraudDataset('yelp')
-        
-    Returns:
-        g (DGLGraph): Il grafo caricato
-        features (torch.Tensor): Le feature dei nodi
-        labels (torch.Tensor): Le etichette (0: normale, 1: frode)
-    """
-    print(f"--- Caricamento dataset: {name} ---")
-    
-    if name == 'amazon':
-        dataset = FraudAmazonDataset()
-        g = dataset[0]
-    elif name == 'yelp':
-        # 'yelp' è una variante di FraudDataset
-        dataset = FraudDataset('yelp')
-        g = dataset[0]
-    else:
-        raise ValueError(f"Dataset '{name}' non supportato. Scegli tra 'amazon' o 'yelp'.")
 
-    # In DGL, questi dataset sono spesso 'Heterograph' (multi-relazionali).
-    # Per semplicità nel Federated Learning, spesso si convertono in omogenei.
-    if len(g.etypes) > 1:
-        print(f"Rilevate relazioni multiple ({g.etypes}). Conversione in grafo omogeneo...")
-        # Trasformiamo le diverse relazioni in archi semplici mantenendo feature e label.
-        # Nelle versioni recenti di DGL le chiavi restano 'feature' e 'label'.
-        g = dgl.to_homogeneous(g, ndata=['feature', 'label'])
+class GraphFraudDataset:
+    def __init__(
+        self,
+        name: str = "amazon",
+        train_size: float = 1.0,
+        val_size: float = 0.0,
+    ) -> None:
+        name = name.lower().strip()
+        if name not in ("amazon", "yelp"):
+            raise ValueError(
+                f"Dataset '{name}' is not supported. Choose 'amazon' or 'yelp'."
+            )
 
-    features = g.ndata['feature']
-    labels = g.ndata['label']
-    
-    print(f"Grafo caricato con {g.num_nodes()} nodi e {g.num_edges()} archi.")
-    print(f"Numero di feature: {features.shape[1]}")
-    
-    return g, features, labels
+        print(f"--- Loading dataset: {name} ---")
+        self.name = name
+        self.raw = FraudDataset(name, train_size=train_size, val_size=val_size)
+        self.num_classes = int(self.raw.num_classes)
+        g_hetero = self.raw[0]
+        self.graph = dgl.to_simple(dgl.to_homogeneous(g_hetero, ndata=["feature", "label"]), return_counts="weight")
+        self.features = self.graph.ndata["feature"]
+        self.labels = self.graph.ndata["label"].long()
 
-# Se esegui il file direttamente, puoi fare un test rapido
+        print(
+            f"Graph: {self.graph.num_nodes()} nodes, "
+            f"{self.graph.num_edges()} edges, "
+            f"{self.features.shape[1]} feature dimensions, "
+            f"{self.num_classes} classes."
+        )
+
+
+def load_graph_dataset(name: str = "amazon") -> tuple[dgl.DGLGraph, torch.Tensor, torch.Tensor]:
+    ds = GraphFraudDataset(name=name)
+    return ds
+
+
 if __name__ == "__main__":
-    graph, feat, lab = load_graph_dataset('amazon')
-    print("Test completato con successo.")
+    ds = load_graph_dataset("yelp")
+    print(ds.graph.edata["weight"])
+    print(ds.graph.ndata["feature"][0])
+    print(ds.graph.ndata["label"][0])
+    print(ds.num_classes)

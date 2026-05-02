@@ -6,7 +6,6 @@ import numpy as np
 import torch
 import dgl
 import networkx as nx
-import networkx.algorithms.community as nx_comm
 
 
 # ---------------------------------------------------------------------------
@@ -34,9 +33,11 @@ def dirichlet_partition(
         seed:      Random seed for reproducibility.
 
     Returns:
-        Dictionary {client_id: DGLGraph} with halo nodes for GNN message passing.
+        Dictionary {client_id: DGLGraph} built with node_subgraph (no halo nodes).
     """
     rng = np.random.default_rng(seed)
+    gen = torch.Generator()
+    gen.manual_seed(seed)
     n_classes = int(labels.max().item()) + 1
     node_part = torch.full((g.num_nodes(),), -1, dtype=torch.long)
 
@@ -55,72 +56,68 @@ def dirichlet_partition(
 
     unassigned = (node_part == -1).nonzero(as_tuple=True)[0]
     if len(unassigned) > 0:
-        node_part[unassigned] = torch.randint(0, n_clients, (len(unassigned),))
+        node_part[unassigned] = torch.randint(0, n_clients, (len(unassigned),), generator=gen)
 
-    raw = dgl.partition_graph_with_halo(g, node_part, extra_cached_hops=1)
-    return raw[0] if isinstance(raw, tuple) else raw
-
-
+    return _build_client_subgraphs(g, node_part, n_clients)
 # ---------------------------------------------------------------------------
-# Louvain community partition
+# Random partition
 # ---------------------------------------------------------------------------
 
-def louvain_partition(
+def random_partition(
     g: dgl.DGLGraph,
     n_clients: int,
     seed: int = 42,
-    resolution: float = 1.0,
 ) -> dict[int, dgl.DGLGraph]:
     """
-    Partition a DGL graph into n_clients subgraphs using Louvain community detection.
-
-    Steps:
-      1. Convert DGL -> undirected NetworkX graph
-      2. Run Louvain (nx.community.louvain_communities) to find natural communities
-      3. Merge communities greedily (smallest-first) until exactly n_clients remain
-      4. Build node_part tensor and call partition_graph_with_halo
+    Partition graph nodes uniformly at random across clients.
 
     Args:
         g:          Homogeneous DGLGraph.
-        n_clients:  Desired number of partitions.
-        seed:       Random seed passed to Louvain.
-        resolution: Louvain resolution parameter (higher -> more, smaller communities).
+        n_clients:  Number of partitions.
+        seed:       Random seed.
 
     Returns:
-        Dictionary {client_id: DGLGraph} compatible with metis_partition output.
+        Dictionary {client_id: DGLGraph} built with node_subgraph (no halo nodes).
     """
-    nx_g = dgl.to_networkx(g).to_undirected()
-    nx_g.remove_edges_from(nx.selfloop_edges(nx_g))
+    gen = torch.Generator()
+    gen.manual_seed(seed)
+    node_part = torch.randint(0, n_clients, (g.num_nodes(),), generator=gen)
+    return _build_client_subgraphs(g, node_part, n_clients)
 
-    communities = nx_comm.louvain_communities(nx_g, seed=seed, resolution=resolution)
-    print(f"  Louvain found {len(communities)} communities "
-          f"(target: {n_clients} clients)")
 
-    comm_list = [set(c) for c in communities]
+# ---------------------------------------------------------------------------
+# METIS partition (DGL)
+# ---------------------------------------------------------------------------
 
-    while len(comm_list) > n_clients:
-        comm_list.sort(key=len)
-        comm_list[0] = comm_list[0] | comm_list[1]
-        comm_list.pop(1)
+def metis_partition(
+    g: dgl.DGLGraph,
+    n_clients: int,
+) -> dict[int, dgl.DGLGraph]:
+    """
+    Partition graph with DGL METIS and rebuild no-halo client subgraphs.
 
-    while len(comm_list) < n_clients:
-        comm_list.sort(key=len, reverse=True)
-        largest = list(comm_list[0])
-        half = len(largest) // 2
-        comm_list[0] = set(largest[:half])
-        comm_list.append(set(largest[half:]))
+    Args:
+        g:          Homogeneous DGLGraph.
+        n_clients:  Number of partitions.
 
+    Returns:
+        Dictionary {client_id: DGLGraph} built with node_subgraph (no halo nodes).
+    """
+    metis_parts = dgl.metis_partition(g, n_clients)
     node_part = torch.full((g.num_nodes(),), -1, dtype=torch.long)
-    for cid, members in enumerate(comm_list):
-        for node in members:
-            node_part[int(node)] = cid
+
+    for cid in range(n_clients):
+        subg = metis_parts[cid]
+        gids = subg.ndata["_ID"].long()
+        if "inner_node" in subg.ndata:
+            gids = gids[subg.ndata["inner_node"].bool()]
+        node_part[gids] = cid
 
     unassigned = (node_part == -1).nonzero(as_tuple=True)[0]
     if len(unassigned):
         node_part[unassigned] = torch.randint(0, n_clients, (len(unassigned),))
 
-    raw = dgl.partition_graph_with_halo(g, node_part, extra_cached_hops=1)
-    return raw[0] if isinstance(raw, tuple) else raw
+    return _build_client_subgraphs(g, node_part, n_clients)
 
 
 # ---------------------------------------------------------------------------
@@ -152,18 +149,24 @@ def kmeans_partition(
         seed:       Random seed for K-Means++ initialization.
 
     Returns:
-        Dictionary {client_id: DGLGraph} compatible with metis_partition output.
+        Dictionary {client_id: DGLGraph} built with node_subgraph (no halo nodes).
     """
     from sklearn.cluster import KMeans
 
+    gen = torch.Generator()
+    gen.manual_seed(seed)
+
     if features is not None:
-        X = features.numpy() if isinstance(features, torch.Tensor) else features
+        if isinstance(features, torch.Tensor):
+            X = features.detach().cpu().numpy()
+        else:
+            X = np.asarray(features)
     else:
         # Fallback: structural features (in-degree, out-degree, degree ratio)
         in_deg  = g.in_degrees().float()
         out_deg = g.out_degrees().float()
         ratio   = in_deg / (out_deg + 1e-6)
-        X = torch.stack([in_deg, out_deg, ratio], dim=1).numpy()
+        X = torch.stack([in_deg, out_deg, ratio], dim=1).detach().cpu().numpy()
 
     # Normalize features for stable K-Means convergence
     X_mean = X.mean(axis=0, keepdims=True)
@@ -183,10 +186,9 @@ def kmeans_partition(
 
     unassigned = (node_part < 0).nonzero(as_tuple=True)[0]
     if len(unassigned):
-        node_part[unassigned] = torch.randint(0, n_clients, (len(unassigned),))
+        node_part[unassigned] = torch.randint(0, n_clients, (len(unassigned),), generator=gen)
 
-    raw = dgl.partition_graph_with_halo(g, node_part, extra_cached_hops=1)
-    return raw[0] if isinstance(raw, tuple) else raw
+    return _build_client_subgraphs(g, node_part, n_clients)
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +210,7 @@ def spectral_partition(
     optimal for partitioning well-separated graph communities.
 
     Note: scales as O(N * n_clients) with sparse eigen-decomposition (ARPACK).
-    Feasible up to ~50k nodes; for larger graphs prefer Louvain.
+    Feasible up to ~50k nodes; for larger graphs prefer METIS.
 
     Args:
         g:          Homogeneous DGLGraph.
@@ -216,17 +218,20 @@ def spectral_partition(
         seed:       Random seed.
 
     Returns:
-        Dictionary {client_id: DGLGraph} compatible with metis_partition output.
+        Dictionary {client_id: DGLGraph} built with node_subgraph (no halo nodes).
     """
     from sklearn.cluster import SpectralClustering
     import scipy.sparse as sp
+
+    gen = torch.Generator()
+    gen.manual_seed(seed)
 
     # Build sparse adjacency matrix from DGL graph
     src, dst = g.edges()
     n = g.num_nodes()
     data = np.ones(len(src), dtype=np.float32)
     A = sp.csr_matrix(
-        (data, (src.numpy(), dst.numpy())), shape=(n, n)
+        (data, (src.detach().cpu().numpy(), dst.detach().cpu().numpy())), shape=(n, n)
     )
     # Symmetrize (SpectralClustering requires symmetric affinity)
     A = (A + A.T).astype(np.float32)
@@ -246,23 +251,38 @@ def spectral_partition(
 
     unassigned = (node_part < 0).nonzero(as_tuple=True)[0]
     if len(unassigned):
-        node_part[unassigned] = torch.randint(0, n_clients, (len(unassigned),))
+        node_part[unassigned] = torch.randint(0, n_clients, (len(unassigned),), generator=gen)
 
-    raw = dgl.partition_graph_with_halo(g, node_part, extra_cached_hops=1)
-    return raw[0] if isinstance(raw, tuple) else raw
+    return _build_client_subgraphs(g, node_part, n_clients)
+
+
+def _build_client_subgraphs(
+    g: dgl.DGLGraph,
+    node_part: torch.Tensor,
+    n_clients: int,
+) -> dict[int, dgl.DGLGraph]:
+    """
+    Build one induced subgraph per client using node_subgraph (no halo nodes).
+    """
+    client_graphs = {}
+    for client_id in range(n_clients):
+        nodes_of_this_client = torch.where(node_part == client_id)[0]
+        client_graphs[client_id] = dgl.node_subgraph(g, nodes_of_this_client)
+    return client_graphs
 
 
 # ---------------------------------------------------------------------------
 # Shared utilities
 # ---------------------------------------------------------------------------
 
-def _cross_edge_stats(g: dgl.DGLGraph, partitions: dict, n_clients: int) -> int:
+def _cross_edge_stats(
+    g: dgl.DGLGraph, partitions: dict[int, dgl.DGLGraph], n_clients: int
+) -> int:
     node_part_vec = torch.full((g.num_nodes(),), -1, dtype=torch.long)
     for cid in range(n_clients):
         subg  = partitions[cid]
         gids  = subg.ndata["_ID"].long()
-        inner = subg.ndata["inner_node"].bool()
-        node_part_vec[gids[inner]] = cid
+        node_part_vec[gids] = cid
     s, d = g.edges()
     both  = (node_part_vec[s] >= 0) & (node_part_vec[d] >= 0)
     cross = (both & (node_part_vec[s] != node_part_vec[d])).sum().item()
@@ -272,7 +292,7 @@ def _cross_edge_stats(g: dgl.DGLGraph, partitions: dict, n_clients: int) -> int:
 def _print_report(
     g: dgl.DGLGraph,
     labels: torch.Tensor,
-    partitions: dict,
+    partitions: dict[int, dgl.DGLGraph],
     n_clients: int,
     n_classes: int,
     method: str,
@@ -282,14 +302,13 @@ def _print_report(
     total = g.num_edges()
 
     print(f"\n[{method}] Partitioning time: {elapsed:.3f}s")
-    print(f"\n{'Client':<8} {'Inner nodes':<14} {'Label dist (inner)':<35}")
+    print(f"\n{'Client':<8} {'Nodes':<14} {'Label dist':<35}")
     print("-" * 58)
     for cid in range(n_clients):
         subg   = partitions[cid]
         gids   = subg.ndata["_ID"].long()
-        inner  = subg.ndata["inner_node"].bool()
-        counts = labels[gids[inner]].bincount(minlength=n_classes).tolist()
-        print(f"  {cid:<6} {inner.sum().item():<14} {counts}")
+        counts = labels[gids].bincount(minlength=n_classes).tolist()
+        print(f"  {cid:<6} {subg.num_nodes():<14} {counts}")
     print("-" * 58)
     print(f"Cross-partition edges: {cross} / {total} ({100 * cross / total:.1f}%)\n")
 
@@ -337,17 +356,15 @@ def _build_realistic_graph(n_nodes: int, n_clients: int, seed: int) -> nx.Graph:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Demo: Dirichlet vs Louvain graph partitioning"
+        description="Demo: graph partitioning methods"
     )
     parser.add_argument("--n-nodes",    type=int,   default=6000)
     parser.add_argument("--n-classes",  type=int,   default=2)
     parser.add_argument("--n-clients",  type=int,   default=15)
     parser.add_argument("--alpha",      type=float, default=0.5,
                         help="Dirichlet alpha (lower = more non-IID)")
-    parser.add_argument("--resolution", type=float, default=1.0,
-                        help="Louvain resolution (higher = more communities)")
     parser.add_argument("--method",     type=str,   default="both",
-                        choices=["dirichlet", "louvain", "kmeans", "spectral", "both"])
+                        choices=["dirichlet", "random", "metis", "kmeans", "spectral", "both"])
     parser.add_argument("--seed",       type=int,   default=42)
     args = parser.parse_args()
 
@@ -365,7 +382,6 @@ if __name__ == "__main__":
     )
     g = dgl.to_simple(g)
 
-    # Imbalanced labels (70 / 30)
     raw_probs = torch.tensor([0.70, 0.30][: args.n_classes], dtype=torch.float32)
     raw_probs /= raw_probs.sum()
     labels = torch.multinomial(
@@ -375,7 +391,7 @@ if __name__ == "__main__":
     print("=" * 65)
     print(f"Asymmetric SBM graph: {g.num_nodes()} nodes | {g.num_edges()} edges")
     print(f"Global label dist   : {labels.bincount(minlength=args.n_classes).tolist()}")
-    print(f"Clients: {args.n_clients}  |  alpha={args.alpha}  resolution={args.resolution}")
+    print(f"Clients: {args.n_clients}  |  alpha={args.alpha}")
     print("=" * 65)
 
     if args.method in ("dirichlet", "both"):
@@ -386,13 +402,19 @@ if __name__ == "__main__":
         _print_report(g, labels, parts_d, args.n_clients, args.n_classes,
                       "DIRICHLET", time.time() - t0)
 
-    if args.method in ("louvain", "both"):
+    if args.method in ("random", "both"):
         t0 = time.time()
-        parts_l = louvain_partition(
-            g, args.n_clients, seed=args.seed, resolution=args.resolution
+        parts_r = random_partition(
+            g, args.n_clients, seed=args.seed
         )
-        _print_report(g, labels, parts_l, args.n_clients, args.n_classes,
-                      "LOUVAIN", time.time() - t0)
+        _print_report(g, labels, parts_r, args.n_clients, args.n_classes,
+                      "RANDOM", time.time() - t0)
+
+    if args.method in ("metis", "both"):
+        t0 = time.time()
+        parts_m = metis_partition(g, args.n_clients)
+        _print_report(g, labels, parts_m, args.n_clients, args.n_classes,
+                      "METIS", time.time() - t0)
 
     if args.method in ("kmeans", "both"):
         t0 = time.time()
