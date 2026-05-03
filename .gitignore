@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+
+# Local experiment outputs
+*.db
+optuna_best_*.json
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/

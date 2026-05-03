@@ -6,7 +6,7 @@ import os
 
 import optuna
 
-from main import add_experiment_args, run_experiment
+from src.experiments import add_experiment_args, run_experiment
 
 
 def build_parser() -> argparse.ArgumentParser:
