@@ -21,7 +21,10 @@ class FedAvgServer:
         return OrderedDict(
             (k, v.detach().cpu().clone()) for k, v in self.global_model.state_dict().items()
         )
-
+    def get_local_states(self) -> dict[int, OrderedDict[str, torch.Tensor]]:
+        '''Returns the most recent client updates as a dict mapping client_id to state_dict'''
+        return self.current_client_updates
+    
     def aggregate(
         self, client_updates: list[tuple[int, OrderedDict[str, torch.Tensor], int]]
     ) -> None:

@@ -106,6 +106,10 @@ def add_experiment_args(parser: argparse.ArgumentParser) -> None:
         help="Validation metric used to select/tune the best run.",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--dont-aggregate",
+        action="store_true",
+        help="If set, evaluates local client models without serveraggregation (for baseline with blind clients).",
+    )
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -292,6 +296,7 @@ def _run_training_loop(
     progress_callback: Callable[[int, dict[str, float]], None] | None,
     log: Callable[[str], None],
 ) -> dict[str, object]:
+    ''' Every round, trains all clients and aggregates updates on the server, evaluates on val/test every eval_every rounds, tracks best round by selection_metric. Returns a dict with best round info and history. '''
     history: list[dict[str, object]] = []
     best_round = 0
     best_val_metrics: dict[str, float] = {}
@@ -312,9 +317,9 @@ def _run_training_loop(
             log(f"Round {rnd:04d} | train_loss={train_loss:.4f}")
             continue
 
-        val_metrics = evaluate_federated(server, clients, model_fn, "val")
+        val_metrics = evaluate_federated(server, clients, model_fn, "val", args.dont_aggregate)
         test_metrics = (
-            evaluate_federated(server, clients, model_fn, "test")
+            evaluate_federated(server, clients, model_fn, "test", args.dont_aggregate)
             if evaluate_test
             else None
         )

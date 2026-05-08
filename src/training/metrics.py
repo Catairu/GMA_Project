@@ -28,9 +28,12 @@ def evaluate_federated(
     clients: list[FederatedClient],
     model_fn: ModelFactory,
     mask_type: str = "test",
+    no_aggregation: bool = False,
+
 ) -> dict[str, float]:
     """Evaluate the global model on all clients with sample-weighted metrics."""
     global_state = server.get_global_state()
+    local_states = server.get_local_states()
 
     total_loss = 0.0
     total_correct = 0
@@ -39,7 +42,7 @@ def evaluate_federated(
 
     for client in clients:
         loss, correct, n_samples, confmat = client.evaluate(
-            global_state,
+            local_states.get(client.client_id, global_state) if no_aggregation else global_state,
             model_fn,
             mask_type=mask_type,
         )
