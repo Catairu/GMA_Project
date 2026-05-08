@@ -142,12 +142,11 @@ def run_experiment(
     evaluate_test: bool = True,
     progress_callback: Callable[[int, dict[str, float]], None] | None = None,
 ) -> dict[str, object]:
-    validate_args(args)
-
     def log(message: str) -> None:
         if verbose:
             print(message)
 
+    validate_args(args)
     set_seed(args.seed)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -352,7 +351,7 @@ def _train_round(
     model_fn: Callable[[], torch.nn.Module],
 ) -> float:
     global_state = server.get_global_state()
-    updates: list[tuple[OrderedDict[str, torch.Tensor], int]] = []
+    updates: list[tuple[OrderedDict[str, torch.Tensor], int]] = [] # list of (client_state_dict, num_samples)
     weighted_round_loss = 0.0
     round_samples = 0
 
@@ -361,7 +360,7 @@ def _train_round(
             global_state,
             model_fn,
         )
-        updates.append((client_state, n_samples))
+        updates.append((client.client_id, client_state, n_samples))
         weighted_round_loss += client_loss * n_samples
         round_samples += n_samples
 
