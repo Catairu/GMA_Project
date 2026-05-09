@@ -147,8 +147,7 @@ def run_experiment(
     progress_callback: Callable[[int, dict[str, float]], None] | None = None,
 ) -> dict[str, object]:
     def log(message: str) -> None:
-        if verbose:
-            print(message)
+        print(message) if verbose else None
 
     validate_args(args)
     set_seed(args.seed)
@@ -316,7 +315,8 @@ def _run_training_loop(
         if not should_eval:
             log(f"Round {rnd:04d} | train_loss={train_loss:.4f}")
             continue
-
+        
+        # aggregate evaluations across clients and compute metrics (global metrics)
         val_metrics = evaluate_federated(server, clients, model_fn, "val", args.dont_aggregate)
         test_metrics = (
             evaluate_federated(server, clients, model_fn, "test", args.dont_aggregate)

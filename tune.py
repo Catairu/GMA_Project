@@ -5,6 +5,7 @@ import json
 import os
 
 import optuna
+import torch
 
 from src.experiments import add_experiment_args, run_experiment
 
@@ -172,6 +173,12 @@ def main() -> None:
         raise ValueError("--n-trials must be > 0.")
     if args.pruner_warmup_rounds < 0:
         raise ValueError("--pruner-warmup-rounds must be >= 0.")
+    
+    print(f"CUDA disponibile: {torch.cuda.is_available()}")
+    print(f"Numero GPU: {torch.cuda.device_count()}")
+    if torch.cuda.is_available():
+        print(f"GPU corrente: {torch.cuda.current_device()}")
+        print(f"Nome GPU: {torch.cuda.get_device_name(0)}")
 
     direction = "minimize" if args.selection_metric == "loss" else "maximize"
     sampler_seed = args.sampler_seed if args.sampler_seed is not None else args.seed
@@ -220,3 +227,17 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+'''
+first optuna hyperparameter tuning for federated GraphSAGE.
+
+Best trial
+  number: 25
+  value: 0.923857
+  params: {"class_weighting": "none", "dropout": 0.0, "hidden_dim": 128, "local_epochs": 20, "lr": 0.0026759617806772903, "weight_decay": 1e-05}
+  best_round: 30
+  best_val: {"accuracy": 0.9823083403538332, "balanced_accuracy": 0.9011410474777222, "loss": 0.09893313214212056, "macro_f1": 0.9238565564155579, "macro_precision": 0.9498133659362793, "macro_recall": 0.9011410474777222}
+  
+Test metrics at validation-selected round 30: {"accuracy": 0.9725343320848939, "balanced_accuracy": 0.8664166927337646, "loss": 0.12187391743830467, "macro_f1": 0.8895187377929688, "macro_precision": 0.9164140224456787, "macro_recall": 0.8664166927337646}
+Final-round test metrics: {"accuracy": 0.9667082813150228, "balanced_accuracy": 0.8632805347442627, "loss": 0.17145857933359906, "macro_f1": 0.8712949752807617, "macro_precision": 0.8797491788864136, "macro_recall": 0.8632805347442627}
+
+'''
