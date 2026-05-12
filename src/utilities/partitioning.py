@@ -310,6 +310,10 @@ def _print_report(
         counts = labels[gids].bincount(minlength=n_classes).tolist()
         print(f"  {cid:<6} {subg.num_nodes():<14} {counts}")
     print("-" * 58)
+
+    total_edges = g.num_edges()
+    partition_edges = sum(part.num_edges() for part in partitions.values())
+    print(f"SIMPLE edgeloss: {1- partition_edges / total_edges:.2%}")
     print(f"Cross-partition edges: {cross} / {total} ({100 * cross / total:.1f}%)\n")
 
 

@@ -10,6 +10,7 @@ ModelFactory = Callable[[], torch.nn.Module]
 
 def compute_class_weights(labels: torch.Tensor, num_classes: int) -> torch.Tensor:
     counts = labels.detach().cpu().long().bincount(minlength=num_classes).float()
+    print(f"Label counts: {counts.tolist()}")
     total = counts.sum()
     if total == 0:
         return torch.ones(num_classes, dtype=torch.float32)

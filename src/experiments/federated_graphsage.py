@@ -300,6 +300,7 @@ def _run_training_loop(
     best_round = 0
     best_val_metrics: dict[str, float] = {}
     best_test_metrics: dict[str, float] | None = None
+    best_global_state: OrderedDict[str, torch.Tensor] | None = None
     final_val_metrics: dict[str, float] = {}
     final_test_metrics: dict[str, float] | None = None
     best_score = float("inf") if args.selection_metric == "loss" else -float("inf")
@@ -332,6 +333,7 @@ def _run_training_loop(
             best_round = rnd
             best_val_metrics = val_metrics
             best_test_metrics = test_metrics
+            best_global_state = server.get_global_state()
 
         history.append(_build_history_entry(rnd, train_loss, val_metrics, test_metrics))
 
@@ -344,6 +346,7 @@ def _run_training_loop(
         "best_round": best_round,
         "best_val_metrics": best_val_metrics,
         "best_test_metrics": best_test_metrics,
+        "best_global_state": best_global_state,
         "final_val_metrics": final_val_metrics,
         "final_test_metrics": final_test_metrics,
         "history": history,
