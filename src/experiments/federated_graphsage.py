@@ -64,23 +64,23 @@ def add_experiment_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--dataset",
         type=str,
-        default="amazon",
+        default="yelp",
         choices=["amazon", "yelp"],
     )
-    parser.add_argument("--n-clients", type=int, default=10)
-    parser.add_argument("--global-rounds", type=int, default=1000)
-    parser.add_argument("--local-epochs", type=int, default=20)
+    parser.add_argument("--n-clients", type=int, default=100)
+    parser.add_argument("--global-rounds", type=int, default=200)
+    parser.add_argument("--local-epochs", type=int, default=3)
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--weight-decay", type=float, default=5e-4)
     parser.add_argument("--hidden-dim", type=int, default=128)
     parser.add_argument("--dropout", type=float, default=0.2)
-    parser.add_argument("--train-ratio", type=float, default=0.7)
+    parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--eval-every", type=int, default=10)
     parser.add_argument(
         "--partition-method",
         type=str,
-        default="metis",
+        default="kmeans",
         choices=["metis", "random", "dirichlet", "kmeans"],
     )
     parser.add_argument("--dirichlet-alpha", type=float, default=0.5)
