@@ -63,6 +63,7 @@ def evaluate_federated(
             "macro_precision": 0.0,
             "macro_recall": 0.0,
             "macro_f1": 0.0,
+            "fraud_f1": 0.0,
         }
 
     if total_confmat is None:
@@ -79,6 +80,9 @@ def evaluate_federated(
     )
     valid_classes = support > 0
 
+    n_classes = total_confmat.shape[0]
+    fraud_f1 = per_class_f1[1].item() if n_classes > 1 and support[1] > 0 else 0.0
+
     return {
         "loss": total_loss / total_samples,
         "accuracy": total_correct / total_samples,
@@ -86,6 +90,7 @@ def evaluate_federated(
         "macro_precision": per_class_precision[valid_classes].mean().item(),
         "macro_recall": per_class_recall[valid_classes].mean().item(),
         "macro_f1": per_class_f1[valid_classes].mean().item(),
+        "fraud_f1": fraud_f1,
     }
 
 

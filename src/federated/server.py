@@ -10,19 +10,12 @@ class FedAvgServer:
         self.current_client_updates: dict[int, OrderedDict[str, torch.Tensor]] | None = None 
 
     def get_global_state(self) -> OrderedDict[str, torch.Tensor]:
-        ''''
-        Returns a detached copy of the global model's state dict on CPU, first time is randomly initialized, example format:
-        OrderedDict([
-            ('conv1.weight', tensor([[-0.123, 0.456, ...], ...])),     # shape: (hidden_dim, in_dim)
-            ('conv1.bias', tensor([0.001, -0.002, ...])),               # shape: (hidden_dim,)
-            ('conv2.weight', tensor([[0.789, -0.234, ...], ...])),     # shape: (num_classes, hidden_dim)
-            ('conv2.bias', tensor([-0.005, 0.010, ...])),               # shape: (num_classes,)
-        ])'''
+        """Returns a detached CPU copy of the global model state dict."""
         return OrderedDict(
             (k, v.detach().cpu().clone()) for k, v in self.global_model.state_dict().items()
         )
     def get_local_states(self) -> dict[int, OrderedDict[str, torch.Tensor]]:
-        '''Returns the most recent client updates as a dict mapping client_id to state_dict'''
+        """Returns the most recent client updates as {client_id: state_dict}."""
         return self.current_client_updates
     
     def aggregate(

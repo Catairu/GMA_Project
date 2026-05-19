@@ -18,8 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_experiment_args(parser)
 
-    # Default più sobri per tuning federato.
-    # Puoi comunque sovrascriverli da terminale.
+    # Conservative defaults for federated tuning; can be overridden from the CLI.
     parser.set_defaults(
         global_rounds=100,
         eval_every=10,
@@ -102,14 +101,11 @@ def suggest_hyperparameters(
     base_args: argparse.Namespace,
 ) -> argparse.Namespace:
     """
-    Suggerisce solo iperparametri del modello/ottimizzazione.
+    Suggest model and optimizer hyperparameters only.
 
-    Nota importante:
-    - local_epochs NON viene tunato qui.
-    - class_weighting NON viene tunato qui.
-
-    Questi due parametri incidono molto sull'interpretazione dell'esperimento
-    federato, quindi è meglio fissarli da CLI.
+    Note: local_epochs and class_weighting are intentionally not tuned here —
+    they strongly affect the interpretation of the federated experiment and
+    should be fixed from the CLI.
     """
     args = copy.deepcopy(base_args)
 
@@ -256,12 +252,12 @@ def write_results_json(
 
 
 def print_cuda_info() -> None:
-    print(f"CUDA disponibile: {torch.cuda.is_available()}")
-    print(f"Numero GPU: {torch.cuda.device_count()}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    print(f"GPU count: {torch.cuda.device_count()}")
 
     if torch.cuda.is_available():
-        print(f"GPU corrente: {torch.cuda.current_device()}")
-        print(f"Nome GPU: {torch.cuda.get_device_name(0)}")
+        print(f"Current GPU: {torch.cuda.current_device()}")
+        print(f"GPU name: {torch.cuda.get_device_name(0)}")
 
 
 def run_final_evaluation(
@@ -269,10 +265,10 @@ def run_final_evaluation(
     best_params: dict[str, object],
 ) -> dict[str, object] | list[dict[str, object]]:
     """
-    Esegue il final run con gli iperparametri migliori.
+    Run the final evaluation with the best hyperparameters.
 
-    Se args.final_seeds è None, esegue un solo run con args.seed.
-    Se args.final_seeds contiene più seed, esegue un run per ogni seed.
+    If args.final_seeds is None, runs once with args.seed.
+    If args.final_seeds contains multiple seeds, runs once per seed.
     """
     seeds = args.final_seeds if args.final_seeds else [args.seed]
 

@@ -48,10 +48,10 @@ class FederatedClient:
 
     def _build_train_subgraph(self) -> dgl.DGLGraph:
         """
-        Costruisce un sottografo contenente solo i nodi di training.
+        Build a subgraph containing only training nodes.
 
-        Questo evita che, durante il training, GraphSAGE faccia message passing
-        usando nodi di validation/test presenti nel subgrafo locale.
+        This prevents GraphSAGE from doing message passing through
+        val/test nodes present in the local subgraph during training.
         """
         train_nodes = torch.where(self.train_mask)[0]
 
@@ -70,10 +70,10 @@ class FederatedClient:
         model_fn,
     ) -> tuple[OrderedDict[str, torch.Tensor], int, float]:
         """
-        Esegue un round locale di training.
+        Run one local training round.
 
-        Il modello riceve i pesi globali dal server, si allena solo sui nodi
-        train del client e restituisce i pesi aggiornati.
+        The model receives the global weights from the server, trains on the
+        client's train nodes only, and returns the updated weights.
         """
         if self.num_train_samples == 0:
             return global_state_dict, 0, 0.0
@@ -158,12 +158,9 @@ class FederatedClient:
         mask_type: str = "test",
     ) -> tuple[float, int, int, torch.Tensor]:
         """
-        Valuta il modello sul subgrafo locale completo usando la maschera scelta.
+        Evaluate the model on the full local subgraph using the chosen mask.
 
-        mask_type può essere:
-        - "train"
-        - "val"
-        - "test"
+        mask_type must be one of: "train", "val", "test".
         """
         if mask_type not in {"train", "val", "test"}:
             raise ValueError(

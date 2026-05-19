@@ -64,10 +64,10 @@ def add_experiment_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--dataset",
         type=str,
-        default="yelp",
-        choices=["amazon", "yelp"],
+        default="cora",
+        choices=["amazon", "yelp", "cora"],
     )
-    parser.add_argument("--n-clients", type=int, default=100)
+    parser.add_argument("--n-clients", type=int, default=10)
     parser.add_argument("--global-rounds", type=int, default=200)
     parser.add_argument("--local-epochs", type=int, default=3)
     parser.add_argument("--lr", type=float, default=5e-4)
@@ -80,7 +80,7 @@ def add_experiment_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--partition-method",
         type=str,
-        default="kmeans",
+        default="random",
         choices=["metis", "random", "dirichlet", "kmeans"],
     )
     parser.add_argument("--dirichlet-alpha", type=float, default=0.5)
@@ -295,7 +295,7 @@ def _run_training_loop(
     progress_callback: Callable[[int, dict[str, float]], None] | None,
     log: Callable[[str], None],
 ) -> dict[str, object]:
-    ''' Every round, trains all clients and aggregates updates on the server, evaluates on val/test every eval_every rounds, tracks best round by selection_metric. Returns a dict with best round info and history. '''
+    """Every round trains all clients and aggregates on the server. Evaluates on val/test every eval_every rounds and tracks the best round by selection_metric."""
     history: list[dict[str, object]] = []
     best_round = 0
     best_val_metrics: dict[str, float] = {}
@@ -359,7 +359,7 @@ def _train_round(
     model_fn: Callable[[], torch.nn.Module],
 ) -> float:
     global_state = server.get_global_state()
-    updates: list[tuple[OrderedDict[str, torch.Tensor], int]] = [] # list of (client_state_dict, num_samples)
+    updates: list[tuple[int, OrderedDict[str, torch.Tensor], int]] = []  # (client_id, state_dict, n_samples)
     weighted_round_loss = 0.0
     round_samples = 0
 

@@ -2,15 +2,16 @@
 set -euo pipefail
 
 # =========================
-# Configurazione esperimento
+# Experiment configuration
 # =========================
 
 DATASETS=("amazon" "yelp")
-CLIENTS=(1 5 10 20)
+CLIENTS=(5 10 20)
 
-PARTITION_METHOD="kmeans"
+# Override this to use kmeans, metis, dirichlet, etc.
+PARTITION_METHOD="${PARTITION_METHOD:-random}"
 
-RESULT_DIR="${RESULT_DIR:-results_kmeans}"
+RESULT_DIR="${RESULT_DIR:-results_${PARTITION_METHOD}}"
 N_TRIALS="${N_TRIALS:-20}"
 GLOBAL_ROUNDS="${GLOBAL_ROUNDS:-150}"
 LOCAL_EPOCHS="${LOCAL_EPOCHS:-3}"
@@ -77,8 +78,8 @@ if final_result is None:
         "Do not use --skip-final-test if you want test metrics."
     )
 
-# Se final_result è una lista perché hai usato --final-seeds,
-# qui facciamo la media dei best_test_metrics sui seed.
+# If final_result is a list (produced by --final-seeds),
+# average best_test_metrics across seeds.
 if isinstance(final_result, list):
     macro_recalls = []
     balanced_accs = []
@@ -113,16 +114,17 @@ PY
 done
 
 # =========================
-# Creazione tabella finale
+# Build final summary table
 # =========================
 
-python - "$SUMMARY_CSV" "$SUMMARY_MD" <<'PY'
+python - "$SUMMARY_CSV" "$SUMMARY_MD" "$PARTITION_METHOD" <<'PY'
 import csv
 import sys
 from pathlib import Path
 
 summary_csv = Path(sys.argv[1])
 summary_md = Path(sys.argv[2])
+partition_method = sys.argv[3]
 
 rows = []
 
@@ -140,7 +142,7 @@ def get_row(dataset: str, n_clients: int):
 clients = [1, 5, 10, 20]
 
 lines = []
-lines.append("# KMeans partitioning - Test results")
+lines.append(f"# {partition_method.upper()} partitioning - Test results")
 lines.append("")
 lines.append(
     "| Amazon - Clients | Amazon Test Macro Recall | Amazon Test Balanced Acc |  | Yelp - Clients | Yelp Test Macro Recall | Yelp Test Balanced Acc |"
